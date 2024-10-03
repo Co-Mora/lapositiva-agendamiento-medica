@@ -1,0 +1,101 @@
+service: medico-cita-sistema
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  environment:
+    DYNAMODB_TABLE: ${self:service}-${self:provider.stage}
+    SNS_TOPIC_PE: ${self:service}-pe-${self:provider.stage}
+    SNS_TOPIC_CL: ${self:service}-cl-${self:provider.stage}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}"
+    - Effect: Allow
+      Action:
+        - sns:Publish
+      Resource: 
+        - arn:aws:sns:${opt:region, self:provider.region}:*:${self:provider.environment.SNS_TOPIC_PE}
+        - arn:aws:sns:${opt:region, self:provider.region}:*:${self:provider.environment.SNS_TOPIC_CL}
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+        - sqs:ReceiveMessage
+        - sqs:DeleteMessage
+        - sqs:GetQueueAttributes
+      Resource: 
+        - arn:aws:sqs:${opt:region, self:provider.region}:*:${self:service}-pe-${self:provider.stage}
+        - arn:aws:sqs:${opt:region, self:provider.region}:*:${self:service}-cl-${self:provider.stage}
+    - Effect: Allow
+      Action:
+        - events:PutEvents
+      Resource: arn:aws:events:${opt:region, self:provider.region}:*:event-bus/${self:service}-${self:provider.stage}
+
+functions:
+  appointment:
+    handler: src/infrastructure/handlers/appointmentHandler.handler
+    events: 
+      - http:
+          path: appointment
+          method: post
+      - http:
+          path: appointment
+          method: get
+  appointmentR:
+    handler: src/infrastructure/handlers/appointmentRHandler.handler
+    events:
+      - sqs:
+          arn: arn:aws:sqs:${opt:region, self:provider.region}:*:${self:service}-pe-${self:provider.stage}
+resources:
+  Resources:
+    AppointmentsDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: appointmentId
+            AttributeType: S
+          - AttributeName: insuredId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: appointmentId
+            KeyType: HASH
+          - AttributeName: insuredId
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:provider.environment.DYNAMODB_TABLE}
+
+    SNSTopicPE:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:provider.environment.SNS_TOPIC_PE}
+
+    SNSTopicCL:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:provider.environment.SNS_TOPIC_CL}
+
+    SQSQueuePE:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-pe-${self:provider.stage}
+
+    SQSQueueCL:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-cl-${self:provider.stage}
+
+    EventBridge:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:service}-${self:provider.stage}
+
+plugins:
+  - serverless-plugin-typescript
